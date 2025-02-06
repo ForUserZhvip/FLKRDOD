@@ -40,10 +40,16 @@ async function generateResponse(prompt, user_data) {
     }
 
 
-
     try {
         // Show processing message *before* the API call
-        const processingMessage = await bot.sendMessage(user_data.chatId, "جاوەروانبە بۆ وەلام داناوە....."); // Store message for later editing
+        let processingMessage;  // Declare outside try block to be accessible in catch
+        try {
+            processingMessage = await bot.sendMessage(user_data.chatId, "جاوەروانبە بۆ وەلام داناوە....."); // Store message for later editing
+        } catch (sendMessageError) {
+            console.error("Error sending initial processing message:", sendMessageError);
+            return "Error sending processing message. Please try again."; // Or handle more gracefully
+        }
+
 
         const result = await model.generateContent(fullPrompt);
         const response = await result.response;
@@ -51,21 +57,41 @@ async function generateResponse(prompt, user_data) {
 
 
         // Update the "Processing..." message with the actual response
-        await bot.editMessageText(text, {
-            chat_id: user_data.chatId,
-            message_id: processingMessage.message_id,
-        });
+        try {
+            await bot.editMessageText(text, {
+                chat_id: user_data.chatId,
+                message_id: processingMessage.message_id,
+            });
+        } catch (editMessageError) {
+            console.error("Error editing message:", editMessageError);
+            // If editing fails, send a new message instead.
+            await bot.sendMessage(user_data.chatId, text);
+        }
 
 
         return text; // Return the text for internal use (e.g., logging)
 
     } catch (error) {
         console.error("Error generating content with Gemini API:", error);
+
         //Also edit processing message if error occurs
-        await bot.editMessageText(`Error: ${error.message}`, {
-            chat_id: user_data.chatId,
-            message_id: processingMessage.message_id,
-        });
+        if (processingMessage && processingMessage.message_id) {  // Check if processingMessage exists
+            try {
+                await bot.editMessageText(`Error: ${error.message}`, {
+                    chat_id: user_data.chatId,
+                    message_id: processingMessage.message_id,
+                });
+            } catch (editError) {
+                console.error("Error editing error message:", editError);
+                 await bot.sendMessage(user_data.chatId, `Error: ${error.message}`); // Send a new message if editing fails
+
+            }
+        } else {
+            // If processingMessage never created (sendMessage failed), send a direct message
+            await bot.sendMessage(user_data.chatId, `Error: ${error.message}`);
+
+        }
+
         return `Error: ${error.message}`; // Consistent error return
     }
 }
@@ -75,6 +101,9 @@ async function generateResponse(prompt, user_data) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
+// Add user_data property to bot object
+
+bot.user_data = {};
 // --- Start Command ---
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
@@ -94,7 +123,7 @@ bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const messageId = query.message.message_id;
     const user_data = bot.user_data || (bot.user_data = {}); // Initialize if not existing
-    const chatUserData = user_data[chatId] || (user_data[chatId] = {});
+    const chatUserData = user_data[chatId] || (user_data[chatId] = {};
 
 
     if (query.data === 'help') {
